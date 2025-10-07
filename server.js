@@ -6,16 +6,28 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// =========================
-// TEST ENDPOINT
-// =========================
-app.get("/", (req, res) => {
-  res.send("🚀 Roberta API funcionando correctamente");
-});
+// ======================================================
+// PEQUEÑA FUNCIÓN DE SIMILITUD ENTRE PALABRAS
+// ======================================================
+function similarity(a, b) {
+  a = a.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  b = b.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-// =========================
-// ENDPOINT: Buscar productos (GraphQL mejorado)
-// =========================
+  if (a === b) return 1;
+  const longer = a.length > b.length ? a : b;
+  const shorter = a.length > b.length ? b : a;
+  const longerLength = longer.length;
+
+  let same = 0;
+  for (let i = 0; i < shorter.length; i++) {
+    if (longer.includes(shorter[i])) same++;
+  }
+  return same / longerLength;
+}
+
+// ======================================================
+// ENDPOINT PRINCIPAL /products (búsqueda difusa robusta)
+// ======================================================
 app.get("/products", async (req, res) => {
   try {
     const queryRaw = req.query.q || "";
@@ -23,17 +35,16 @@ app.get("/products", async (req, res) => {
       return res.json({ message: "Por favor, incluye un parámetro ?q=" });
     }
 
-    // 🔤 Normalizar tildes, acentos y minúsculas
     const query = queryRaw
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase();
 
-    // GraphQL flexible: busca en title, vendor y product_type
+    // Traer productos activos (solo lo necesario)
     const graphqlQuery = {
       query: `
         {
-          products(first: 50, query: "${query}* OR vendor:${query}* OR product_type:${query}*") {
+          products(first: 200, query: "status:active") {
             edges {
               node {
                 id
@@ -41,7 +52,6 @@ app.get("/products", async (req, res) => {
                 handle
                 vendor
                 productType
-                status
                 totalInventory
                 featuredImage { url }
                 variants(first: 1) {
@@ -73,28 +83,40 @@ app.get("/products", async (req, res) => {
     );
 
     const data = await response.json();
-
     if (!data?.data?.products?.edges?.length) {
       return res.json({ message: "Sin resultados" });
     }
 
-    // Filtrar activos y con stock
-    const products = data.data.products.edges
-      .map((edge) => edge.node)
+    // ======================================================
+    // FILTRAR LOCALMENTE POR SIMILITUD
+    // ======================================================
+    const allProducts = data.data.products.edges.map((edge) => edge.node);
+
+    const filtered = allProducts.filter((p) => {
+      const vendor = p.vendor || "";
+      const title = p.title || "";
+      const type = p.productType || "";
+
+      const text = `${vendor} ${title} ${type}`
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+
+      // coincidencia si contiene o es similar
+      return (
+        text.includes(query) ||
+        similarity(vendor, query) > 0.6 ||
+        similarity(title, query) > 0.6 ||
+        similarity(type, query) > 0.6
+      );
+    });
+
+    const available = filtered
       .filter(
         (p) =>
-          p.status === "ACTIVE" &&
-          (p.totalInventory ?? 0) > 0 &&
+          p.totalInventory > 0 &&
           p.variants.edges?.[0]?.node?.availableForSale
       )
-      .filter((p) => {
-        // coincidencia textual manual (más permisiva)
-        const text = `${p.title} ${p.vendor} ${p.productType}`
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase();
-        return text.includes(query);
-      })
       .slice(0, 10)
       .map((p) => {
         const variant = p.variants.edges[0]?.node;
@@ -119,7 +141,7 @@ app.get("/products", async (req, res) => {
         };
       });
 
-    res.json(products.length > 0 ? products : { message: "Sin resultados" });
+    res.json(available.length > 0 ? available : { message: "Sin resultados" });
   } catch (error) {
     console.error("Error buscando productos:", error);
     res.status(500).json({ error: "Error interno del servidor" });
