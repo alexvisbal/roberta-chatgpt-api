@@ -23,7 +23,7 @@ app.get("/products", async (req, res) => {
       return res.json({ message: "Por favor, incluye un parámetro ?q=" });
     }
 
-    // === GraphQL: obtener solo productos activos, publicados y con stock ===
+    // === GraphQL: solo productos activos, publicados y con stock ===
     const graphqlQuery = {
       query: `
         {
@@ -36,12 +36,11 @@ app.get("/products", async (req, res) => {
                 vendor
                 productType
                 totalInventory
-                featuredImage {
-                  url
-                }
+                featuredImage { url }
                 variants(first: 3) {
                   edges {
                     node {
+                      id
                       price
                       availableForSale
                       inventoryQuantity
@@ -69,7 +68,7 @@ app.get("/products", async (req, res) => {
 
     const data = await response.json();
 
-    // === Filtrar solo productos activos, publicados y con stock disponible ===
+    // === Filtrar productos activos, publicados y con stock ===
     const products =
       data?.data?.products?.edges
         .map((edge) => edge.node)
@@ -91,14 +90,23 @@ app.get("/products", async (req, res) => {
               .replace(/\.webp(\?.*)?$/, "_medium.webp$1");
           }
 
+          const firstVariant = p.variants.edges[0]?.node || {};
+          const variantId = firstVariant.id
+            ? firstVariant.id.split("/").pop()
+            : null;
+
           return {
             id: p.id,
+            variant_id: variantId,
             title: p.title,
             brand: p.vendor || "",
             category: p.productType || "",
-            price: p.variants.edges[0]?.node.price || "N/A",
+            price: firstVariant.price || "N/A",
             image: imageUrl,
             url: `https://robertaonline.com/products/${p.handle}`,
+            add_to_cart: variantId
+              ? `https://robertaonline.com/cart/${variantId}:1`
+              : null,
           };
         }) || [];
 
