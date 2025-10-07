@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "Roberta Online",
+  "name_for_model": "roberta_online",
+  "description_for_human": "Compra productos profesionales de peluquería en Roberta Online.",
+  "description_for_model": "Permite buscar, listar y consultar productos de peluquería profesional desde Roberta Online, devolviendo nombre, precio, imagen y enlace directo.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "http://localhost:3000/openapi.yaml"
+  },
+  "logo_url": "https://robertaonline.com/favicon.ico",
+  "contact_email": "soporte@robertaonline.com",
+  "legal_info_url": "https://robertaonline.com/policies/privacy-policy"
+}

@@ -1,0 +1,75 @@
+openapi: 3.1.0
+info:
+  title: Roberta Online API
+  description: >
+    API para consultar productos de peluquería profesional y crear pedidos de prueba
+    desde Roberta Online. Permite buscar productos por palabra clave y obtener
+    título, precio, imagen y URL pública del producto.
+  version: "1.0.1"
+servers:
+  - url: https://localhost
+paths:
+  /products:
+    get:
+      operationId: getProducts
+      summary: Buscar productos en Roberta Online
+      description: Devuelve una lista de productos que coinciden con el término de búsqueda.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Palabra clave a buscar (por ejemplo, inoa, majirel, alfaparf, etc.)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lista de productos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                      example: "gid://shopify/Product/123456789"
+                    title:
+                      type: string
+                      example: "L'Oreal Inoa 6.3 - 60ml"
+                    price:
+                      type: string
+                      example: "10.84"
+                    image:
+                      type: string
+                      format: uri
+                      example: "https://cdn.shopify.com/..."
+                    url:
+                      type: string
+                      format: uri
+                      example: "https://robertaonline.com/products/inoa-6-3-60ml"
+  /checkout/create:
+    post:
+      operationId: createCheckout
+      summary: Crear pedido de prueba
+      description: Crea un pedido de prueba con un producto genérico y un email fijo.
+      responses:
+        "200":
+          description: Pedido creado correctamente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        example: "1234567890"
+                      email:
+                        type: string
+                        example: "cliente@ejemplo.com"
+                      financial_status:
+                        type: string
+                        example: "pending"
