@@ -6,7 +6,9 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Prueba básica para saber que el servidor responde
+// =========================
+// PRUEBA BÁSICA DEL SERVIDOR
+// =========================
 app.get("/", (req, res) => {
   res.send("🚀 Roberta API funcionando correctamente");
 });
@@ -21,22 +23,28 @@ app.get("/products", async (req, res) => {
       return res.json({ message: "Por favor, incluye un parámetro ?q=" });
     }
 
+    // === GraphQL: obtener solo productos activos, publicados y con stock ===
     const graphqlQuery = {
       query: `
         {
-          products(first: 20, query: "${query}") {
+          products(first: 30, query: "${query} status:active published_status:published") {
             edges {
               node {
                 id
                 title
                 handle
+                vendor
+                productType
+                totalInventory
                 featuredImage {
                   url
                 }
-                variants(first: 1) {
+                variants(first: 3) {
                   edges {
                     node {
                       price
+                      availableForSale
+                      inventoryQuantity
                     }
                   }
                 }
@@ -61,27 +69,38 @@ app.get("/products", async (req, res) => {
 
     const data = await response.json();
 
-    // === NUEVO BLOQUE CON MINIATURAS ===
+    // === Filtrar solo productos activos, publicados y con stock disponible ===
     const products =
-      data?.data?.products?.edges.map((edge) => {
-        let imageUrl = edge.node.featuredImage?.url || null;
+      data?.data?.products?.edges
+        .map((edge) => edge.node)
+        .filter(
+          (p) =>
+            p.totalInventory > 0 &&
+            p.variants.edges.some(
+              (v) => v.node.availableForSale && v.node.inventoryQuantity > 0
+            )
+        )
+        .map((p) => {
+          // === Miniaturas proporcionales (_medium o _small) ===
+          let imageUrl = p.featuredImage?.url || null;
+          if (imageUrl) {
+            imageUrl = imageUrl
+              .replace(/\.png(\?.*)?$/, "_medium.png$1")
+              .replace(/\.jpg(\?.*)?$/, "_medium.jpg$1")
+              .replace(/\.jpeg(\?.*)?$/, "_medium.jpeg$1")
+              .replace(/\.webp(\?.*)?$/, "_medium.webp$1");
+          }
 
-        if (imageUrl) {
-          // Forzar miniatura proporcional (_medium o _small)
-          imageUrl = imageUrl.replace(/\.png(\?.*)?$/, '_medium.png$1');
-          imageUrl = imageUrl.replace(/\.jpg(\?.*)?$/, '_medium.jpg$1');
-          imageUrl = imageUrl.replace(/\.jpeg(\?.*)?$/, '_medium.jpeg$1');
-          imageUrl = imageUrl.replace(/\.webp(\?.*)?$/, '_medium.webp$1');
-        }
-
-        return {
-          id: edge.node.id,
-          title: edge.node.title,
-          price: edge.node.variants.edges[0]?.node.price || "N/A",
-          image: imageUrl,
-          url: `https://robertaonline.com/products/${edge.node.handle}`,
-        };
-      }) || [];
+          return {
+            id: p.id,
+            title: p.title,
+            brand: p.vendor || "",
+            category: p.productType || "",
+            price: p.variants.edges[0]?.node.price || "N/A",
+            image: imageUrl,
+            url: `https://robertaonline.com/products/${p.handle}`,
+          };
+        }) || [];
 
     res.json(products.length > 0 ? products : { message: "Sin resultados" });
   } catch (error) {
