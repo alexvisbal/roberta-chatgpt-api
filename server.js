@@ -6,11 +6,14 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Cache local (por término de búsqueda)
+const cache = new Map();
+
 // =========================
 // PRUEBA BÁSICA DEL SERVIDOR
 // =========================
 app.get("/", (req, res) => {
-  res.send("🚀 Roberta API funcionando correctamente");
+  res.send("🚀 Roberta API funcionando correctamente (optimizada y con cache)");
 });
 
 // ---------- Utils de búsqueda flexible ----------
@@ -23,7 +26,6 @@ const normalize = (str) =>
     .replace(/\s+/g, " ") // colapsa espacios
     .trim();
 
-// Distancia de Levenshtein (tolerancia a errores tipográficos)
 function levenshtein(a, b) {
   if (a === b) return 0;
   const al = a.length, bl = b.length;
@@ -36,42 +38,35 @@ function levenshtein(a, b) {
     for (let j = 1; j <= bl; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
       dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,      // borrado
-        dp[i][j - 1] + 1,      // inserción
-        dp[i - 1][j - 1] + cost // sustitución
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
       );
     }
   }
   return dp[al][bl];
 }
 
-// Regla de similitud por longitud (tolerancia escalada)
 function similar(a, b) {
   const d = levenshtein(a, b);
   const len = Math.max(a.length, b.length);
-  if (len <= 4) return d === 0;      // muy cortas: exacto
-  if (len <= 6) return d <= 1;       // pequeñas: 1 error
-  if (len <= 10) return d <= 2;      // medianas: 2 errores
-  return d <= 3;                     // largas: hasta 3 errores
+  if (len <= 4) return d <= 1;
+  if (len <= 6) return d <= 1;
+  if (len <= 10) return d <= 2;
+  return d <= 3;
 }
 
-// ¿El producto coincide con TODOS los tokens de la consulta (en cualquiera de sus tokens)?
 function matchesProduct(product, queryTokens) {
   const title = normalize(product.title);
   const vendor = normalize(product.vendor || "");
   const productType = normalize(product.productType || "");
-
   const candidateStrings = [title, vendor, productType].filter(Boolean);
   const candidateTokens = new Set(
     candidateStrings.flatMap((s) => s.split(" ").filter(Boolean))
   );
 
-  // Para cada token de la query, debe existir algún token candidato que coincida (includes o similar)
   return queryTokens.every((qTok) => {
-    // también permitimos includes contra el string completo (títulos largos)
     if (candidateStrings.some((s) => s.includes(qTok))) return true;
-
-    // si no, probamos similitud token a token
     for (const cTok of candidateTokens) {
       if (cTok.includes(qTok) || qTok.includes(cTok) || similar(cTok, qTok)) {
         return true;
@@ -82,7 +77,7 @@ function matchesProduct(product, queryTokens) {
 }
 
 // =========================
-//// ENDPOINT: Buscar productos (GraphQL) con búsqueda flexible
+// ENDPOINT: Buscar productos (GraphQL + Cache + fuzzy)
 // =========================
 app.get("/products", async (req, res) => {
   try {
@@ -94,7 +89,18 @@ app.get("/products", async (req, res) => {
     const queryNorm = normalize(rawQuery);
     const queryTokens = queryNorm.split(" ").filter(Boolean);
 
-    // --- Pedimos productos activos/publicados; filtramos stock y similitud en Node ---
+    // 🔹 1️⃣ Cache local (10 minutos)
+    if (cache.has(queryNorm)) {
+      const cached = cache.get(queryNorm);
+      if (Date.now() - cached.timestamp < 10 * 60 * 1000) {
+        console.log("🟢 Resultado servido desde cache:", queryNorm);
+        return res.json(cached.data);
+      }
+      cache.delete(queryNorm);
+    }
+
+    console.log("🔵 Consultando Shopify para:", queryNorm);
+
     const graphqlQuery = {
       query: `
         {
@@ -139,7 +145,7 @@ app.get("/products", async (req, res) => {
 
     const data = await response.json();
 
-    // --- 1) Solo activos + publicados + con stock ---
+    // --- Filtra solo activos + publicados + con stock ---
     let products =
       data?.data?.products?.edges
         .map((edge) => edge.node)
@@ -151,10 +157,10 @@ app.get("/products", async (req, res) => {
             )
         ) || [];
 
-    // --- 2) Coincidencia flexible por tokens (tolerante a errores) ---
+    // --- Coincidencia flexible ---
     products = products.filter((p) => matchesProduct(p, queryTokens));
 
-    // --- 3) Ranking simple (prioriza coincidencia en vendor, luego título, luego tipo) ---
+    // --- Ranking ---
     const score = (p) => {
       const t = normalize(p.title);
       const v = normalize(p.vendor || "");
@@ -165,22 +171,20 @@ app.get("/products", async (req, res) => {
         if (t.includes(q)) s += 2;
         if (pt.includes(q)) s += 1;
       }
-      return -s; // sort asc => mayor score primero
+      return -s;
     };
     products = products.sort((a, b) => score(a) - score(b));
 
-    // --- 4) Formato final (miniaturas + add_to_cart) ---
+    // --- Miniaturas 200x200 y add_to_cart ---
     const formatted = products.map((p) => {
       let imageUrl = p.featuredImage?.url || null;
       if (imageUrl) {
-        imageUrl = imageUrl
-          .replace(/\.png(\?.*)?$/, "_medium.png$1")
-          .replace(/\.jpg(\?.*)?$/, "_medium.jpg$1")
-          .replace(/\.jpeg(\?.*)?$/, "_medium.jpeg$1")
-          .replace(/\.webp(\?.*)?$/, "_medium.webp$1");
+        imageUrl = imageUrl.replace(
+          /\.(png|jpe?g|webp)(\?.*)?$/,
+          "_200x200.$1$2"
+        );
       }
 
-      // elegimos la primera variante disponible
       const firstVariant =
         p.variants.edges.find(
           (v) => v.node.availableForSale && v.node.inventoryQuantity > 0
@@ -202,6 +206,9 @@ app.get("/products", async (req, res) => {
           : null,
       };
     });
+
+    // --- Cachea resultado por 10 minutos ---
+    cache.set(queryNorm, { data: formatted, timestamp: Date.now() });
 
     res.json(formatted.length > 0 ? formatted : { message: "Sin resultados" });
   } catch (error) {
