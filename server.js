@@ -1,6 +1,7 @@
 import express from "express";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
+import crypto from "crypto";
 
 dotenv.config();
 const app = express();
@@ -13,17 +14,17 @@ const cache = new Map();
 // PRUEBA BÁSICA DEL SERVIDOR
 // =========================
 app.get("/", (req, res) => {
-  res.send("🚀 Roberta API funcionando correctamente (optimizada y con cache)");
+  res.send("🚀 Roberta API funcionando con cache CDN y local");
 });
 
-// ---------- Utils de búsqueda flexible ----------
+// ---------- Utils ----------
 const normalize = (str) =>
   (str || "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // quita acentos
-    .replace(/[^a-z0-9\s]/g, " ") // limpia signos
-    .replace(/\s+/g, " ") // colapsa espacios
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 
 function levenshtein(a, b) {
@@ -64,20 +65,18 @@ function matchesProduct(product, queryTokens) {
   const candidateTokens = new Set(
     candidateStrings.flatMap((s) => s.split(" ").filter(Boolean))
   );
-
   return queryTokens.every((qTok) => {
     if (candidateStrings.some((s) => s.includes(qTok))) return true;
     for (const cTok of candidateTokens) {
-      if (cTok.includes(qTok) || qTok.includes(cTok) || similar(cTok, qTok)) {
+      if (cTok.includes(qTok) || qTok.includes(cTok) || similar(cTok, qTok))
         return true;
-      }
     }
     return false;
   });
 }
 
 // =========================
-// ENDPOINT: Buscar productos (GraphQL + Cache + fuzzy)
+// ENDPOINT PRINCIPAL: /products
 // =========================
 app.get("/products", async (req, res) => {
   try {
@@ -88,19 +87,26 @@ app.get("/products", async (req, res) => {
 
     const queryNorm = normalize(rawQuery);
     const queryTokens = queryNorm.split(" ").filter(Boolean);
+    const cacheKey = queryNorm;
+    const cacheTTL = 10 * 60 * 1000; // 10 min
 
-    // 🔹 1️⃣ Cache local (10 minutos)
-    if (cache.has(queryNorm)) {
-      const cached = cache.get(queryNorm);
-      if (Date.now() - cached.timestamp < 10 * 60 * 1000) {
-        console.log("🟢 Resultado servido desde cache:", queryNorm);
+    // 1️⃣ Verificar cache local
+    if (cache.has(cacheKey)) {
+      const cached = cache.get(cacheKey);
+      if (Date.now() - cached.timestamp < cacheTTL) {
+        const etag = crypto.createHash("md5").update(cacheKey).digest("hex");
+        res.setHeader("Cache-Control", "public, max-age=600, s-maxage=600");
+        res.setHeader("ETag", `"${etag}"`);
+        console.log("🟢 Desde cache local:", queryNorm);
         return res.json(cached.data);
+      } else {
+        cache.delete(cacheKey);
       }
-      cache.delete(queryNorm);
     }
 
     console.log("🔵 Consultando Shopify para:", queryNorm);
 
+    // 2️⃣ Petición a Shopify GraphQL
     const graphqlQuery = {
       query: `
         {
@@ -145,7 +151,7 @@ app.get("/products", async (req, res) => {
 
     const data = await response.json();
 
-    // --- Filtra solo activos + publicados + con stock ---
+    // 3️⃣ Filtrar solo activos + publicados + con stock
     let products =
       data?.data?.products?.edges
         .map((edge) => edge.node)
@@ -157,10 +163,10 @@ app.get("/products", async (req, res) => {
             )
         ) || [];
 
-    // --- Coincidencia flexible ---
+    // 4️⃣ Filtrar coincidencias flexibles
     products = products.filter((p) => matchesProduct(p, queryTokens));
 
-    // --- Ranking ---
+    // 5️⃣ Ranking de relevancia
     const score = (p) => {
       const t = normalize(p.title);
       const v = normalize(p.vendor || "");
@@ -175,7 +181,7 @@ app.get("/products", async (req, res) => {
     };
     products = products.sort((a, b) => score(a) - score(b));
 
-    // --- Miniaturas 200x200 y add_to_cart ---
+    // 6️⃣ Formato final (miniaturas 200x200 y add_to_cart)
     const formatted = products.map((p) => {
       let imageUrl = p.featuredImage?.url || null;
       if (imageUrl) {
@@ -207,8 +213,13 @@ app.get("/products", async (req, res) => {
       };
     });
 
-    // --- Cachea resultado por 10 minutos ---
-    cache.set(queryNorm, { data: formatted, timestamp: Date.now() });
+    // 7️⃣ Guardar en cache local
+    cache.set(cacheKey, { data: formatted, timestamp: Date.now() });
+
+    // 8️⃣ Cabeceras de cache CDN
+    const etag = crypto.createHash("md5").update(cacheKey).digest("hex");
+    res.setHeader("Cache-Control", "public, max-age=600, s-maxage=600");
+    res.setHeader("ETag", `"${etag}"`);
 
     res.json(formatted.length > 0 ? formatted : { message: "Sin resultados" });
   } catch (error) {
@@ -225,11 +236,7 @@ app.post("/checkout/create", async (req, res) => {
     const order = {
       order: {
         line_items: [
-          {
-            title: "Pedido de prueba desde API",
-            quantity: 1,
-            price: "10.00",
-          },
+          { title: "Pedido de prueba desde API", quantity: 1, price: "10.00" },
         ],
         email: "cliente@ejemplo.com",
         financial_status: "pending",
@@ -260,5 +267,5 @@ app.post("/checkout/create", async (req, res) => {
 // INICIO DEL SERVIDOR
 // =========================
 app.listen(port, () => {
-  console.log(`✅ Roberta API funcionando en http://localhost:${port}`);
+  console.log(`✅ Roberta API lista en http://localhost:${port}`);
 });
