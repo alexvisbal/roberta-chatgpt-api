@@ -14,20 +14,29 @@ app.get("/", (req, res) => {
 });
 
 // =========================
-// ENDPOINT: Buscar productos (GraphQL)
+// ENDPOINT: Buscar productos (GraphQL) con búsqueda flexible
 // =========================
 app.get("/products", async (req, res) => {
   try {
-    const query = req.query.q || "";
-    if (!query) {
+    const rawQuery = req.query.q || "";
+    if (!rawQuery) {
       return res.json({ message: "Por favor, incluye un parámetro ?q=" });
     }
 
-    // === GraphQL: solo productos activos, publicados y con stock ===
+    // --- Normaliza texto: quita acentos, pasa a minúsculas ---
+    const normalize = (str) =>
+      str
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+
+    const query = normalize(rawQuery);
+
+    // --- Petición GraphQL: productos activos y publicados ---
     const graphqlQuery = {
       query: `
         {
-          products(first: 30, query: "${query} status:active published_status:published") {
+          products(first: 100, query: "status:active published_status:published") {
             edges {
               node {
                 id
@@ -68,8 +77,8 @@ app.get("/products", async (req, res) => {
 
     const data = await response.json();
 
-    // === Filtrar productos activos, publicados y con stock ===
-    const products =
+    // --- Filtra solo productos activos, publicados y con stock ---
+    let products =
       data?.data?.products?.edges
         .map((edge) => edge.node)
         .filter(
@@ -78,39 +87,53 @@ app.get("/products", async (req, res) => {
             p.variants.edges.some(
               (v) => v.node.availableForSale && v.node.inventoryQuantity > 0
             )
-        )
-        .map((p) => {
-          // === Miniaturas proporcionales (_medium o _small) ===
-          let imageUrl = p.featuredImage?.url || null;
-          if (imageUrl) {
-            imageUrl = imageUrl
-              .replace(/\.png(\?.*)?$/, "_medium.png$1")
-              .replace(/\.jpg(\?.*)?$/, "_medium.jpg$1")
-              .replace(/\.jpeg(\?.*)?$/, "_medium.jpeg$1")
-              .replace(/\.webp(\?.*)?$/, "_medium.webp$1");
-          }
+        ) || [];
 
-          const firstVariant = p.variants.edges[0]?.node || {};
-          const variantId = firstVariant.id
-            ? firstVariant.id.split("/").pop()
-            : null;
+    // --- Coincidencia flexible (tolerancia ortográfica) ---
+    products = products.filter((p) => {
+      const title = normalize(p.title);
+      const vendor = normalize(p.vendor || "");
+      const productType = normalize(p.productType || "");
 
-          return {
-            id: p.id,
-            variant_id: variantId,
-            title: p.title,
-            brand: p.vendor || "",
-            category: p.productType || "",
-            price: firstVariant.price || "N/A",
-            image: imageUrl,
-            url: `https://robertaonline.com/products/${p.handle}`,
-            add_to_cart: variantId
-              ? `https://robertaonline.com/cart/${variantId}:1`
-              : null,
-          };
-        }) || [];
+      return (
+        title.includes(query) ||
+        vendor.includes(query) ||
+        productType.includes(query)
+      );
+    });
 
-    res.json(products.length > 0 ? products : { message: "Sin resultados" });
+    // --- Formato final con miniaturas y link directo al carrito ---
+    const formatted = products.map((p) => {
+      let imageUrl = p.featuredImage?.url || null;
+      if (imageUrl) {
+        imageUrl = imageUrl
+          .replace(/\.png(\?.*)?$/, "_medium.png$1")
+          .replace(/\.jpg(\?.*)?$/, "_medium.jpg$1")
+          .replace(/\.jpeg(\?.*)?$/, "_medium.jpeg$1")
+          .replace(/\.webp(\?.*)?$/, "_medium.webp$1");
+      }
+
+      const firstVariant = p.variants.edges[0]?.node || {};
+      const variantId = firstVariant.id
+        ? firstVariant.id.split("/").pop()
+        : null;
+
+      return {
+        id: p.id,
+        variant_id: variantId,
+        title: p.title,
+        brand: p.vendor || "",
+        category: p.productType || "",
+        price: firstVariant.price || "N/A",
+        image: imageUrl,
+        url: `https://robertaonline.com/products/${p.handle}`,
+        add_to_cart: variantId
+          ? `https://robertaonline.com/cart/${variantId}:1`
+          : null,
+      };
+    });
+
+    res.json(formatted.length > 0 ? formatted : { message: "Sin resultados" });
   } catch (error) {
     console.error("Error buscando productos:", error);
     res.status(500).json({ error: "Error interno del servidor" });
