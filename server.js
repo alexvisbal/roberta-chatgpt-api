@@ -12,9 +12,6 @@ app.get("/", (req, res) => {
 });
 
 // =========================
-// ENDPOINT: Buscar productos
-// =========================
-// =========================
 // ENDPOINT: Buscar productos (GraphQL)
 // =========================
 app.get("/products", async (req, res) => {
@@ -64,14 +61,27 @@ app.get("/products", async (req, res) => {
 
     const data = await response.json();
 
+    // === NUEVO BLOQUE CON MINIATURAS ===
     const products =
-      data?.data?.products?.edges.map((edge) => ({
-        id: edge.node.id,
-        title: edge.node.title,
-        price: edge.node.variants.edges[0]?.node.price || "N/A",
-        image: edge.node.featuredImage?.url || null,
-        url: `https://robertaonline.com/products/${edge.node.handle}`,
-      })) || [];
+      data?.data?.products?.edges.map((edge) => {
+        let imageUrl = edge.node.featuredImage?.url || null;
+
+        if (imageUrl) {
+          // Forzar miniatura proporcional (_medium o _small)
+          imageUrl = imageUrl.replace(/\.png(\?.*)?$/, '_medium.png$1');
+          imageUrl = imageUrl.replace(/\.jpg(\?.*)?$/, '_medium.jpg$1');
+          imageUrl = imageUrl.replace(/\.jpeg(\?.*)?$/, '_medium.jpeg$1');
+          imageUrl = imageUrl.replace(/\.webp(\?.*)?$/, '_medium.webp$1');
+        }
+
+        return {
+          id: edge.node.id,
+          title: edge.node.title,
+          price: edge.node.variants.edges[0]?.node.price || "N/A",
+          image: imageUrl,
+          url: `https://robertaonline.com/products/${edge.node.handle}`,
+        };
+      }) || [];
 
     res.json(products.length > 0 ? products : { message: "Sin resultados" });
   } catch (error) {
