@@ -25,6 +25,19 @@ app.get("/products", async (req, res) => {
       return res.json({ message: "Por favor, incluye un parámetro ?q=" });
     }
 
+        // 🚫 BLOQUE DE SEGURIDAD: FILTRO DE PALABRAS INADECUADAS
+    const forbiddenWords = [
+      "sexo", "sexual", "porn", "violencia", "arma", "odio",
+      "matar", "política", "religión", "religioso", "guerra",
+      "drogas", "racismo", "terrorismo", "asesinato"
+    ];
+
+    if (forbiddenWords.some(w => query.toLowerCase().includes(w))) {
+      return res.json({
+        message: "💛 Puedo ayudarte con temas de cabello y productos de salón, pero no con ese tipo de consulta."
+      });
+    }
+    
     const graphqlQuery = {
       query: `
         {
