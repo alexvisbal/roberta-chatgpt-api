@@ -1,5 +1,6 @@
 import express from "express";
 import fetch from "node-fetch";
+import sharp from "sharp";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -7,14 +8,14 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // =========================
-// TEST BÁSICO
+// PRUEBA BÁSICA
 // =========================
 app.get("/", (req, res) => {
-  res.send("🚀 Roberta API funcionando correctamente (fuzzy estable)");
+  res.send("🚀 Roberta API funcionando correctamente");
 });
 
 // =========================
-// ENDPOINT: Buscar productos con fuzzy matching estable
+// ENDPOINT: BUSCAR PRODUCTOS
 // =========================
 app.get("/products", async (req, res) => {
   try {
@@ -23,26 +24,27 @@ app.get("/products", async (req, res) => {
       return res.json({ message: "Por favor, incluye un parámetro ?q=" });
     }
 
-    // 🔹 Buscamos normalmente en Shopify (esto sí devuelve resultados)
     const graphqlQuery = {
       query: `
         {
-          products(first: 100, query: "${query}") {
+          products(first: 20, query: "${query} status:active inventory_total:>0") {
             edges {
               node {
                 id
                 title
-                vendor
                 handle
-                status
-                totalInventory
-                featuredImage { url }
-                variants(first: 5) {
+                vendor
+                productType
+                featuredImage {
+                  url
+                }
+                variants(first: 1) {
                   edges {
                     node {
                       id
                       price
                       availableForSale
+                      inventoryQuantity
                     }
                   }
                 }
@@ -66,63 +68,71 @@ app.get("/products", async (req, res) => {
     );
 
     const data = await response.json();
-    const allProducts = data?.data?.products?.edges?.map((e) => e.node) || [];
 
-    // 🔹 FILTRO: solo activos y con inventario > 0
-    const filtered = allProducts.filter(
-      (p) =>
-        (p.status === "active" || p.status === "ACTIVE") &&
-        p.totalInventory > 0
-    );
+    const products =
+      data?.data?.products?.edges
+        ?.map((edge) => {
+          const p = edge.node;
+          const variant = p.variants.edges[0]?.node;
+          if (!variant?.availableForSale || variant?.inventoryQuantity <= 0)
+            return null;
 
-    // 🔹 Si no hay resultados exactos, aplicamos fuzzy search local
-    let results = filtered;
-    if (results.length === 0) {
-      const normalized = query.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      results = allProducts.filter((p) => {
-        const text = `${p.title} ${p.vendor}`
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase();
-        // tolerancia: coincidencia parcial de las primeras 3 letras
-        return (
-          text.includes(normalized) ||
-          text.startsWith(normalized.slice(0, 3)) ||
-          (normalized.length > 4 && text.includes(normalized.slice(0, 4)))
-        );
-      });
+          const imageUrl = p.featuredImage?.url || null;
+          const variantId = variant?.id?.split("/").pop();
+          const addToCart = variantId
+            ? `https://robertaonline.com/cart/${variantId}:1`
+            : null;
+
+          return {
+            id: p.id,
+            title: p.title,
+            brand: p.vendor || "Roberta Online",
+            category: p.productType || "",
+            price: variant?.price || "N/A",
+            image: imageUrl,
+            url: `https://robertaonline.com/products/${p.handle}`,
+            add_to_cart: addToCart,
+          };
+        })
+        .filter(Boolean) || [];
+
+    res.json(products.length > 0 ? products : { message: "Sin resultados" });
+  } catch (error) {
+    console.error("❌ Error buscando productos:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
+
+// =========================
+// ENDPOINT: MINIATURA REAL
+// =========================
+app.get("/thumb", async (req, res) => {
+  try {
+    const imgUrl = req.query.url;
+    if (!imgUrl) {
+      return res.status(400).send("Falta el parámetro ?url=");
     }
 
-    // 🔹 FORMATO FINAL (miniaturas + add to cart)
-    const formatted = results.flatMap((p) => {
-      const variant = p.variants.edges.find((v) => v.node.availableForSale);
-      if (!variant) return [];
-      const variantId = variant.node.id.split("/").pop();
+    // Descargar imagen desde Shopify
+    const response = await fetch(imgUrl);
+    if (!response.ok) {
+      return res.status(404).send("No se pudo descargar la imagen");
+    }
 
-      let imageUrl = p.featuredImage?.url || null;
-      if (imageUrl) {
-        imageUrl = imageUrl
-          .replace(/\.png(\?.*)?$/, "_200x200.png$1")
-          .replace(/\.jpg(\?.*)?$/, "_200x200.jpg$1")
-          .replace(/\.jpeg(\?.*)?$/, "_200x200.jpeg$1")
-          .replace(/\.webp(\?.*)?$/, "_200x200.webp$1");
-      }
+    const buffer = Buffer.from(await response.arrayBuffer());
 
-      return {
-        id: p.id,
-        title: p.title,
-        brand: p.vendor || "Sin marca",
-        price: variant.node.price || "N/A",
-        image: imageUrl,
-        url: `https://robertaonline.com/products/${p.handle}`,
-        add_to_cart: `https://robertaonline.com/cart/${variantId}:1`,
-      };
-    });
+    // Procesar con sharp
+    const resized = await sharp(buffer)
+      .resize(200, 200, { fit: "cover", position: "centre" })
+      .toFormat("webp", { quality: 85 })
+      .toBuffer();
 
-    res.json(formatted.length > 0 ? formatted : { message: "Sin resultados" });
+    res.set("Content-Type", "image/webp");
+    res.set("Cache-Control", "public, max-age=31536000");
+    res.send(resized);
   } catch (error) {
-    console.error("Error buscando productos:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
+    console.error("❌ Error generando miniatura:", error);
+    res.status(500).send("Error generando miniatura");
   }
 });
 
