@@ -6,37 +6,39 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Prueba básica para saber que el servidor responde
+// =========================
+// TEST BÁSICO
+// =========================
 app.get("/", (req, res) => {
-  res.send("🚀 Roberta API funcionando correctamente");
+  res.send("🚀 Roberta API funcionando correctamente con filtros y miniaturas");
 });
 
 // =========================
-// ENDPOINT: Buscar productos (GraphQL)
+// ENDPOINT: Buscar productos activos y con stock
 // =========================
 app.get("/products", async (req, res) => {
   try {
-    const query = req.query.q || "";
-    if (!query) {
-      return res.json({ message: "Por favor, incluye un parámetro ?q=" });
-    }
+    const query = req.query.q?.trim() || "";
+    if (!query) return res.json({ message: "Por favor, incluye un parámetro ?q=" });
 
     const graphqlQuery = {
       query: `
         {
-          products(first: 20, query: "${query}") {
+          products(first: 50, query: "${query}") {
             edges {
               node {
                 id
                 title
                 handle
-                featuredImage {
-                  url
-                }
-                variants(first: 1) {
+                status
+                totalInventory
+                featuredImage { url }
+                variants(first: 5) {
                   edges {
                     node {
+                      id
                       price
+                      availableForSale
                     }
                   }
                 }
@@ -60,17 +62,48 @@ app.get("/products", async (req, res) => {
     );
 
     const data = await response.json();
+    const products = data?.data?.products?.edges || [];
 
-    const products =
-      data?.data?.products?.edges.map((edge) => ({
-        id: edge.node.id,
-        title: edge.node.title,
-        price: edge.node.variants.edges[0]?.node.price || "N/A",
-        image: edge.node.featuredImage?.url || null,
-        url: `https://robertaonline.com/products/${edge.node.handle}`,
-      })) || [];
+    // =========================
+    // FILTRO: Activos + con stock
+    // =========================
+    const activeProducts = products
+      .map((edge) => edge.node)
+      .filter(
+        (p) =>
+          (p.status === "active" || p.status === "ACTIVE") &&
+          p.totalInventory > 0
+      );
 
-    res.json(products.length > 0 ? products : { message: "Sin resultados" });
+    // =========================
+    // FORMATO FINAL + miniaturas
+    // =========================
+    const formatted = activeProducts.flatMap((p) => {
+      const variant = p.variants.edges.find((v) => v.node.availableForSale);
+      if (!variant) return [];
+
+      const variantId = variant.node.id.split("/").pop();
+      let imageUrl = p.featuredImage?.url || null;
+
+      if (imageUrl) {
+        imageUrl = imageUrl
+          .replace(/\.png(\?.*)?$/, "_200x200.png$1")
+          .replace(/\.jpg(\?.*)?$/, "_200x200.jpg$1")
+          .replace(/\.jpeg(\?.*)?$/, "_200x200.jpeg$1")
+          .replace(/\.webp(\?.*)?$/, "_200x200.webp$1");
+      }
+
+      return {
+        id: p.id,
+        title: p.title,
+        price: variant.node.price || "N/A",
+        image: imageUrl,
+        url: `https://robertaonline.com/products/${p.handle}`,
+        add_to_cart: `https://robertaonline.com/cart/${variantId}:1`,
+      };
+    });
+
+    res.json(formatted.length > 0 ? formatted : { message: "Sin resultados" });
   } catch (error) {
     console.error("Error buscando productos:", error);
     res.status(500).json({ error: "Error interno del servidor" });
