@@ -115,32 +115,42 @@ app.get("/thumb", async (req, res) => {
     const imgUrl = req.query.url;
     if (!imgUrl) return res.status(400).send("Falta el parámetro ?url=");
 
-    const response = await axios.get(imgUrl, {
+    // 🔄 Forzar la versión _medium (tamaño oficial de Shopify)
+    const mediumUrl = imgUrl.replace(
+      /\.(png|jpg|jpeg|webp)(\?.*)?$/,
+      "_medium.$1$2"
+    );
+
+    // Descargar directamente la miniatura servida por Shopify
+    const response = await axios.get(mediumUrl, {
       responseType: "arraybuffer",
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
         Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         Referer: "https://robertaonline.com/",
       },
+      validateStatus: () => true,
     });
 
+    // Si la versión _medium no existe, usar la original
     if (response.status !== 200) {
-      console.error("❌ Error al obtener la imagen:", response.status);
-      return res.status(404).send("No se pudo descargar la imagen");
+      console.warn("⚠️ _medium no encontrada, usando original:", imgUrl);
+      const fallback = await axios.get(imgUrl, {
+        responseType: "arraybuffer",
+        headers: { Referer: "https://robertaonline.com/" },
+      });
+      res.set("Content-Type", fallback.headers["content-type"] || "image/jpeg");
+      return res.send(fallback.data);
     }
 
-    const resized = await sharp(response.data)
-      .resize(200, 200, { fit: "cover" })
-      .toFormat("webp", { quality: 85 })
-      .toBuffer();
-
-    res.set("Content-Type", "image/webp");
+    // Enviar la imagen optimizada directamente
+    res.set("Content-Type", response.headers["content-type"] || "image/jpeg");
     res.set("Cache-Control", "public, max-age=31536000");
-    res.send(resized);
+    res.send(response.data);
   } catch (err) {
-    console.error("❌ Error descargando o procesando imagen:", err.message);
-    res.status(500).send("Error generando miniatura");
+    console.error("❌ Error en /thumb:", err.message);
+    res.status(500).send("Error descargando imagen");
   }
 });
 
