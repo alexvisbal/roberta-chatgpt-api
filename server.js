@@ -7,35 +7,35 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // =========================
-// TEST
+// TEST BÁSICO
 // =========================
 app.get("/", (req, res) => {
-  res.send("🚀 Roberta API funcionando correctamente con fuzzy search y miniaturas");
+  res.send("🚀 Roberta API funcionando correctamente (fuzzy estable)");
 });
 
 // =========================
-// ENDPOINT: Buscar productos (con fuzzy matching local)
+// ENDPOINT: Buscar productos con fuzzy matching estable
 // =========================
 app.get("/products", async (req, res) => {
   try {
     const query = req.query.q?.trim() || "";
-    if (!query) return res.json({ message: "Por favor, incluye un parámetro ?q=" });
+    if (!query) {
+      return res.json({ message: "Por favor, incluye un parámetro ?q=" });
+    }
 
-    // Normalizamos texto para buscar sin acentos ni mayúsculas
-    const normalized = query.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
+    // 🔹 Buscamos normalmente en Shopify (esto sí devuelve resultados)
     const graphqlQuery = {
       query: `
         {
-          products(first: 100) {
+          products(first: 100, query: "${query}") {
             edges {
               node {
                 id
                 title
+                vendor
                 handle
                 status
                 totalInventory
-                vendor
                 featuredImage { url }
                 variants(first: 5) {
                   edges {
@@ -68,51 +68,38 @@ app.get("/products", async (req, res) => {
     const data = await response.json();
     const allProducts = data?.data?.products?.edges?.map((e) => e.node) || [];
 
-    // =========================
-    // FILTRO: activos + con stock
-    // =========================
-    const activeProducts = allProducts.filter(
+    // 🔹 FILTRO: solo activos y con inventario > 0
+    const filtered = allProducts.filter(
       (p) =>
         (p.status === "active" || p.status === "ACTIVE") &&
         p.totalInventory > 0
     );
 
-    // =========================
-    // BÚSQUEDA FUZZY LOCAL
-    // =========================
-    const filtered = activeProducts.filter((p) => {
-      const text = `${p.title} ${p.vendor}`
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase();
-      return text.includes(normalized);
-    });
-
-    // Si no hay resultados exactos, usamos coincidencia difusa
+    // 🔹 Si no hay resultados exactos, aplicamos fuzzy search local
     let results = filtered;
     if (results.length === 0) {
-      results = activeProducts.filter((p) => {
+      const normalized = query.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      results = allProducts.filter((p) => {
         const text = `${p.title} ${p.vendor}`
           .normalize("NFD")
           .replace(/[\u0300-\u036f]/g, "")
           .toLowerCase();
-        // Coincidencia parcial: primeras 3-4 letras
+        // tolerancia: coincidencia parcial de las primeras 3 letras
         return (
+          text.includes(normalized) ||
           text.startsWith(normalized.slice(0, 3)) ||
-          text.includes(normalized.slice(0, 3))
+          (normalized.length > 4 && text.includes(normalized.slice(0, 4)))
         );
       });
     }
 
-    // =========================
-    // FORMATEO FINAL
-    // =========================
+    // 🔹 FORMATO FINAL (miniaturas + add to cart)
     const formatted = results.flatMap((p) => {
       const variant = p.variants.edges.find((v) => v.node.availableForSale);
       if (!variant) return [];
       const variantId = variant.node.id.split("/").pop();
-      let imageUrl = p.featuredImage?.url || null;
 
+      let imageUrl = p.featuredImage?.url || null;
       if (imageUrl) {
         imageUrl = imageUrl
           .replace(/\.png(\?.*)?$/, "_200x200.png$1")
@@ -134,13 +121,13 @@ app.get("/products", async (req, res) => {
 
     res.json(formatted.length > 0 ? formatted : { message: "Sin resultados" });
   } catch (error) {
-    console.error("❌ Error buscando productos:", error);
+    console.error("Error buscando productos:", error);
     res.status(500).json({ error: "Error interno del servidor" });
   }
 });
 
 // =========================
-// INICIO
+// INICIO DEL SERVIDOR
 // =========================
 app.listen(port, () => {
   console.log(`✅ Roberta API funcionando en http://localhost:${port}`);
