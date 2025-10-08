@@ -7,24 +7,27 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // =========================
-// TEST BÁSICO
+// TEST
 // =========================
 app.get("/", (req, res) => {
-  res.send("🚀 Roberta API funcionando correctamente con filtros y miniaturas");
+  res.send("🚀 Roberta API funcionando correctamente con fuzzy search y miniaturas");
 });
 
 // =========================
-// ENDPOINT: Buscar productos activos y con stock
+// ENDPOINT: Buscar productos (con fuzzy matching local)
 // =========================
 app.get("/products", async (req, res) => {
   try {
     const query = req.query.q?.trim() || "";
     if (!query) return res.json({ message: "Por favor, incluye un parámetro ?q=" });
 
+    // Normalizamos texto para buscar sin acentos ni mayúsculas
+    const normalized = query.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
     const graphqlQuery = {
       query: `
         {
-          products(first: 50, query: "${query}") {
+          products(first: 100) {
             edges {
               node {
                 id
@@ -32,6 +35,7 @@ app.get("/products", async (req, res) => {
                 handle
                 status
                 totalInventory
+                vendor
                 featuredImage { url }
                 variants(first: 5) {
                   edges {
@@ -62,26 +66,50 @@ app.get("/products", async (req, res) => {
     );
 
     const data = await response.json();
-    const products = data?.data?.products?.edges || [];
+    const allProducts = data?.data?.products?.edges?.map((e) => e.node) || [];
 
     // =========================
-    // FILTRO: Activos + con stock
+    // FILTRO: activos + con stock
     // =========================
-    const activeProducts = products
-      .map((edge) => edge.node)
-      .filter(
-        (p) =>
-          (p.status === "active" || p.status === "ACTIVE") &&
-          p.totalInventory > 0
-      );
+    const activeProducts = allProducts.filter(
+      (p) =>
+        (p.status === "active" || p.status === "ACTIVE") &&
+        p.totalInventory > 0
+    );
 
     // =========================
-    // FORMATO FINAL + miniaturas
+    // BÚSQUEDA FUZZY LOCAL
     // =========================
-    const formatted = activeProducts.flatMap((p) => {
+    const filtered = activeProducts.filter((p) => {
+      const text = `${p.title} ${p.vendor}`
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+      return text.includes(normalized);
+    });
+
+    // Si no hay resultados exactos, usamos coincidencia difusa
+    let results = filtered;
+    if (results.length === 0) {
+      results = activeProducts.filter((p) => {
+        const text = `${p.title} ${p.vendor}`
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase();
+        // Coincidencia parcial: primeras 3-4 letras
+        return (
+          text.startsWith(normalized.slice(0, 3)) ||
+          text.includes(normalized.slice(0, 3))
+        );
+      });
+    }
+
+    // =========================
+    // FORMATEO FINAL
+    // =========================
+    const formatted = results.flatMap((p) => {
       const variant = p.variants.edges.find((v) => v.node.availableForSale);
       if (!variant) return [];
-
       const variantId = variant.node.id.split("/").pop();
       let imageUrl = p.featuredImage?.url || null;
 
@@ -96,6 +124,7 @@ app.get("/products", async (req, res) => {
       return {
         id: p.id,
         title: p.title,
+        brand: p.vendor || "Sin marca",
         price: variant.node.price || "N/A",
         image: imageUrl,
         url: `https://robertaonline.com/products/${p.handle}`,
@@ -105,13 +134,13 @@ app.get("/products", async (req, res) => {
 
     res.json(formatted.length > 0 ? formatted : { message: "Sin resultados" });
   } catch (error) {
-    console.error("Error buscando productos:", error);
+    console.error("❌ Error buscando productos:", error);
     res.status(500).json({ error: "Error interno del servidor" });
   }
 });
 
 // =========================
-// INICIO DEL SERVIDOR
+// INICIO
 // =========================
 app.listen(port, () => {
   console.log(`✅ Roberta API funcionando en http://localhost:${port}`);
