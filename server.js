@@ -10,25 +10,24 @@ const port = process.env.PORT || 3000;
 // TEST
 // =========================
 app.get("/", (req, res) => {
-  res.send("🚀 Roberta API funcionando correctamente");
+  res.send("🚀 Roberta API funcionando correctamente (v3 universal)");
 });
 
 // =========================
-// ENDPOINT: Buscar productos activos y con stock
+// ENDPOINT: Buscar productos activos y con stock (sin filtros de Shopify)
 // =========================
 app.get("/products", async (req, res) => {
   try {
     const query = req.query.q?.trim() || "";
     if (!query) return res.json({ message: "Por favor, incluye un parámetro ?q=" });
 
-    // Normaliza para coincidencias difusas
     const normalized = query.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-    // GraphQL: traemos productos activos (sin published filter)
+    // GraphQL sin filtro de estado ni published_status
     const graphqlQuery = {
       query: `
         {
-          products(first: 100, query: "status:active") {
+          products(first: 200) {
             edges {
               node {
                 id
@@ -70,15 +69,14 @@ app.get("/products", async (req, res) => {
     const data = await response.json();
     const allProducts = data?.data?.products?.edges?.map((e) => e.node) || [];
 
-    // ============================
-    // FILTRO LOCAL (Fuzzy search)
-    // ============================
-    const results = allProducts.filter((p) => {
+    // 🔍 Filtro local (búsqueda flexible)
+    const filtered = allProducts.filter((p) => {
       if (!p.title && !p.vendor) return false;
       const text = `${p.title} ${p.vendor}`
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
         .toLowerCase();
+
       return (
         text.includes(normalized) ||
         text.startsWith(normalized.slice(0, 4)) ||
@@ -86,15 +84,15 @@ app.get("/products", async (req, res) => {
       );
     });
 
-    // ============================
-    // SOLO EN STOCK
-    // ============================
-    const inStock = results.filter((p) => p.totalInventory > 0);
+    // 🧩 Filtra por stock y estado activo
+    const available = filtered.filter(
+      (p) =>
+        (p.status === "ACTIVE" || p.status === "active") &&
+        p.totalInventory > 0
+    );
 
-    // ============================
-    // MAPEO FINAL
-    // ============================
-    const formatted = inStock.flatMap((p) => {
+    // 🧱 Construcción final
+    const formatted = available.flatMap((p) => {
       const variant = p.variants.edges.find((v) => v.node.availableForSale);
       if (!variant) return [];
       const variantId = variant.node.id.split("/").pop();
@@ -128,8 +126,8 @@ app.get("/products", async (req, res) => {
 });
 
 // =========================
-// INICIO DEL SERVIDOR
+// INICIO
 // =========================
 app.listen(port, () => {
-  console.log(`✅ Roberta API funcionando en http://localhost:${port}`);
+  console.log(`✅ Roberta API lista en http://localhost:${port}`);
 });
