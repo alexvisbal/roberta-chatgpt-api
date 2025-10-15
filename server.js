@@ -9,6 +9,16 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // =========================
+// 🔓 CORS GLOBAL — necesario para acceso público desde GPT
+// =========================
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  next();
+});
+
+// =========================
 // TEST ROUTE
 // =========================
 app.get("/", (req, res) => {
@@ -25,7 +35,7 @@ app.get("/products", async (req, res) => {
       return res.json({ message: "Por favor, incluye un parámetro ?q=" });
     }
 
-        // 🚫 BLOQUE DE SEGURIDAD: FILTRO DE PALABRAS INADECUADAS
+    // 🚫 BLOQUE DE SEGURIDAD: FILTRO DE PALABRAS INADECUADAS
     const forbiddenWords = [
       "sexo", "sexual", "porn", "violencia", "arma", "odio",
       "matar", "política", "religión", "religioso", "guerra",
@@ -37,7 +47,7 @@ app.get("/products", async (req, res) => {
         message: "💛 Puedo ayudarte con temas de cabello y productos de salón, pero no con ese tipo de consulta."
       });
     }
-    
+
     const graphqlQuery = {
       query: `
         {
@@ -108,7 +118,7 @@ app.get("/products", async (req, res) => {
             price: variant.price || "N/A",
             image: imageUrl,
             url: `https://robertaonline.com/products/${node.handle}`,
-            add_to_cart: `https://robertaonline.com/cart/${variant.id.split("/").pop()}:1`,
+            add_to_cart: `https://robertaonline.com/cart/add?id=${variant.id.split("/").pop()}&quantity=1&return_to=/cart`,
           };
         })
         .filter(Boolean) || [];
@@ -128,25 +138,21 @@ app.get("/thumb", async (req, res) => {
     const imgUrl = req.query.url;
     if (!imgUrl) return res.status(400).send("Falta el parámetro ?url=");
 
-    // 🔄 Forzar la versión _medium (tamaño oficial de Shopify)
     const mediumUrl = imgUrl.replace(
       /\.(png|jpg|jpeg|webp)(\?.*)?$/,
       "_medium.$1$2"
     );
 
-    // Descargar directamente la miniatura servida por Shopify
     const response = await axios.get(mediumUrl, {
       responseType: "arraybuffer",
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
+        "User-Agent": "Mozilla/5.0",
         Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         Referer: "https://robertaonline.com/",
       },
       validateStatus: () => true,
     });
 
-    // Si la versión _medium no existe, usar la original
     if (response.status !== 200) {
       console.warn("⚠️ _medium no encontrada, usando original:", imgUrl);
       const fallback = await axios.get(imgUrl, {
@@ -157,7 +163,6 @@ app.get("/thumb", async (req, res) => {
       return res.send(fallback.data);
     }
 
-    // Enviar la imagen optimizada directamente
     res.set("Content-Type", response.headers["content-type"] || "image/jpeg");
     res.set("Cache-Control", "public, max-age=31536000");
     res.send(response.data);
@@ -204,6 +209,17 @@ app.post("/checkout/create", async (req, res) => {
     console.error("Error creando pedido:", error);
     res.status(500).json({ error: "Error interno al crear pedido" });
   }
+});
+
+// =========================
+// HEALTH & PING ENDPOINTS
+// =========================
+app.get("/health", (req, res) => {
+  res.json({ ok: true, uptime: process.uptime() });
+});
+
+app.get("/products/ping", (req, res) => {
+  res.json({ status: "ok", message: "Roberta API online 💛" });
 });
 
 // =========================
