@@ -117,8 +117,7 @@ app.get("/products", async (req, res) => {
             category: node.productType,
             price: variant.price || "N/A",
             image: imageUrl,
-            url: `https://robertaonline.com/products/${node.handle}`,
-            add_to_cart: `https://robertaonline.com/cart/add?id=${variant.id.split("/").pop()}&quantity=1&return_to=/cart`,
+            url: `https://robertaonline.com/products/${node.handle}`
           };
         })
         .filter(Boolean) || [];
